@@ -21,7 +21,7 @@ Summarize YouTube videos effortlessly with AI. Fetch transcripts and generate co
 ## 🛠️ Installation
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/diertapasific/sumtube
 cd sumtube
 pip install -r requirements.txt
 ```
