@@ -9,6 +9,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_LEFT, TA_JUSTIFY
 import io
 import re
+import yt_dlp
 
 st.set_page_config(page_title="SumTube - YouTube Summarizer", page_icon="🎬", layout="centered")
 
@@ -151,12 +152,16 @@ if url:
 
             elements = []
 
-            # Title
-            elements.append(Paragraph("YouTube Video Summary", title_style))
-            elements.append(Spacer(1, 12))
+            try:
+                ydl_opts = {"quiet": True}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                    video_title = info.get("title", "Title not found")
+            except Exception as e:
+                video_title = "Youtube Video "
 
             # Final Summary
-            elements.append(Paragraph("Final Summary:", header_style))
+            elements.append(Paragraph(f"“{video_title}” Summary", title_style))
             elements.append(Paragraph(summary_text, text_style))
             elements.append(Spacer(1, 12))
 
