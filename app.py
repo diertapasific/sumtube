@@ -20,11 +20,18 @@ st.write("Paste a YouTube link, and I'll fetch the transcript + generate a summa
 url = st.text_input("📌 Paste a YouTube URL:")
 
 if url:
-    # Extract video ID
+    video_id = None
+    # Case 1: Standard YouTube link (with ?v=)
     match = re.search(r"v=([^&]+)", url)
     if match:
         video_id = match.group(1)
+    # Case 2: Short youtu.be link
     else:
+        match = re.search(r"youtu\.be/([^?&]+)", url)
+        if match:
+            video_id = match.group(1)
+
+    if not video_id:
         st.error("❌ Invalid YouTube URL")
         st.stop()
 
