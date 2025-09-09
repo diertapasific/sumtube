@@ -28,10 +28,21 @@ if url:
         st.error("❌ Invalid YouTube URL")
         st.stop()
 
+    def retrieve_video_title(url):
+        try:
+            ydl_opts = {"quiet": True}
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                video_title = info.get("title", "Title not found")
+        except Exception as e:
+            video_title = "Youtube Video "
+        
+        return video_title
+
     # --- Step 1: Fetch transcript ---
     try:
         with st.spinner("⏳ Fetching transcript..."):
-            transcript = YouTubeTranscriptApi().fetch(video_id=video_id, languages=['en'])
+            transcript = YouTubeTranscriptApi().fetch(video_id=video_id, languages=['en', 'id'])
             full_text = " ".join([snippet.text for snippet in transcript])
         st.success("✅ Transcript fetched!")
     except Exception as e:
@@ -151,15 +162,8 @@ if url:
             )
 
             elements = []
-
-            try:
-                ydl_opts = {"quiet": True}
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
-                    video_title = info.get("title", "Title not found")
-            except Exception as e:
-                video_title = "Youtube Video "
-
+            
+            video_title = retrieve_video_title(url)
             # Final Summary
             elements.append(Paragraph(f"“{video_title}” Summary", title_style))
             elements.append(Paragraph(summary_text, text_style))
@@ -194,11 +198,13 @@ if url:
             for i, s in enumerate(summaries, 1):
                 st.markdown(f"- **Part {i}:** {s}")
 
+            video_title = retrieve_video_title(url)
+
             # PDF download button
             st.download_button(
                 label="⬇️ Download Summary as PDF",
                 data=pdf_buffer,
-                file_name=f"{video_id}_summary.pdf",
+                file_name=f"{video_title}_summary.pdf",
                 mime="application/pdf"
             )
 
