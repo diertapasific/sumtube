@@ -4,6 +4,9 @@ from transformers import pipeline
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import simpleSplit
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_JUSTIFY
 import io
 import re
 
@@ -24,17 +27,25 @@ if url:
         st.error("❌ Invalid YouTube URL")
         st.stop()
 
+    # --- Step 1: Fetch transcript ---
     try:
-        # Fetch transcript
         with st.spinner("⏳ Fetching transcript..."):
             transcript = YouTubeTranscriptApi().fetch(video_id=video_id, languages=['en'])
             full_text = " ".join([snippet.text for snippet in transcript])
         st.success("✅ Transcript fetched!")
+    except Exception as e:
+        st.error(f"❌ Transcript fetch failed: {str(e)}")
+        st.stop()
 
-        # Summarizer
+    # --- Step 2: Init summarizer ---
+    try:
         summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+    except Exception as e:
+        st.error(f"❌ Summarizer init failed: {str(e)}")
+        st.stop()
 
-        # Chunking
+    # --- Step 3: Chunking transcript ---
+    try:
         max_chunk = 800
         sentences = full_text.split(". ")
         chunks, current_chunk = [], ""
@@ -46,76 +57,128 @@ if url:
                 current_chunk = sentence + ". "
         if current_chunk:
             chunks.append(current_chunk.strip())
+    except Exception as e:
+        st.error(f"❌ Chunking failed: {str(e)}")
+        st.stop()
 
-        # Summarize chunks
+    # --- Step 4: Summarize chunks ---
+    try:
         summaries = []
         for i, chunk in enumerate(chunks, 1):
             with st.spinner(f"✨ Summarizing chunk {i}/{len(chunks)}..."):
-                out = summarizer(chunk, max_length=120, min_length=40, do_sample=False)
-                summaries.append(out[0]['summary_text'])
+                if len(chunk.split()) < 25:  # too short, skip summarizer
+                    summaries.append(chunk.strip())
+                    continue
 
-        # If many chunks, summarize combined summaries
-        if len(summaries) > 3:
-            with st.spinner("📝 Generating final summary from chunk summaries..."):
-                combined_text = " ".join(summaries)
-                final_out = summarizer(combined_text, max_length=150, min_length=60, do_sample=False)
-                final_summary = final_out[0]['summary_text']
-        else:
-            final_summary = " ".join(summaries)
+                try:
+                    out = summarizer(
+                        chunk,
+                        max_new_tokens=100,
+                        min_length=30,
+                        do_sample=False
+                    )
+                    summaries.append(out[0]['summary_text'])
+                except Exception:
+                    st.warning(f"⚠️ Chunk {i} could not be summarized, keeping raw text.")
+                    summaries.append(chunk.strip())
 
-        # PDF generator
+        # --- Step 4.2: Multi-pass summarization for final summary ---
+        def compress_texts(text_list, max_new_tokens=250, min_length=80):
+            """Summarize a list of texts into one shorter text."""
+            combined = " ".join(text_list)
+            out = summarizer(
+                combined,
+                max_new_tokens=max_new_tokens,
+                min_length=min_length,
+                do_sample=False
+            )
+            return out[0]['summary_text']
+
+        with st.spinner("📝 Creating refined final summary..."):
+            if len(summaries) > 10:  # only multi-pass if LOTS of chunks
+                # Step 1: Break into groups of 5 summaries (less compression)
+                grouped = [summaries[i:i+5] for i in range(0, len(summaries), 5 )]
+                meta_summaries = [compress_texts(group, 200, 60) for group in grouped]
+
+                # Step 2: Final summarization with bigger allowance
+                final_summary = compress_texts(meta_summaries, 500, 200)
+            else:
+                # Direct summarization with more room
+                final_summary = compress_texts(summaries, 500, 200)
+
+    except Exception as e:
+        st.error(f"❌ Summarization failed: {str(e)}")
+        st.stop()
+
+    # --- Step 5: PDF Generator ---
+    try:
         def create_pdf(summary_text, bullet_points):
             buffer = io.BytesIO()
-            c = canvas.Canvas(buffer, pagesize=letter)
-            width, height = letter
-            margin = 50
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=letter,
+                rightMargin=50,
+                leftMargin=50,
+                topMargin=50,
+                bottomMargin=50
+            )
 
-            def draw_text_block(text_lines, start_y):
-                y = start_y
-                for line in text_lines:
-                    if y < margin:
-                        c.showPage()
-                        y = height - margin
-                    c.drawString(margin, y, line)
-                    y -= 15
-                return y
+            styles = getSampleStyleSheet()
+            
+            # Custom styles
+            title_style = ParagraphStyle(
+                'title',
+                parent=styles['Heading1'],
+                fontSize=16,
+                alignment=TA_JUSTIFY,
+                spaceAfter=20
+            )
+            header_style = ParagraphStyle(
+                'header',
+                parent=styles['Heading2'],
+                fontSize=13,
+                alignment=TA_LEFT,
+                spaceBefore=12,
+                spaceAfter=6
+            )
+            text_style = ParagraphStyle(
+                'body',
+                parent=styles['Normal'],
+                fontSize=11,
+                alignment=TA_JUSTIFY,
+                leading=15
+            )
+
+            elements = []
 
             # Title
-            c.setFont("Helvetica-Bold", 16)
-            y = height - margin
-            c.drawString(margin, y, "YouTube Video Summary")
-            y -= 40
+            elements.append(Paragraph("YouTube Video Summary", title_style))
+            elements.append(Spacer(1, 12))
 
             # Final Summary
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(margin, y, "Final Summary:")
-            y -= 20
-
-            c.setFont("Helvetica", 11)
-            lines = simpleSplit(summary_text, "Helvetica", 11, width - 2*margin)
-            y = draw_text_block(lines, y)
-            y -= 20
+            elements.append(Paragraph("Final Summary:", header_style))
+            elements.append(Paragraph(summary_text, text_style))
+            elements.append(Spacer(1, 12))
 
             # Bullet Points
-            c.setFont("Helvetica-Bold", 12)
-            c.drawString(margin, y, "Bullet Points:")
-            y -= 20
+            elements.append(Paragraph("Bullet Points:", header_style))
+            bullet_items = [
+                ListItem(Paragraph(bp, text_style), leftIndent=20) for bp in bullet_points
+            ]
+            elements.append(ListFlowable(bullet_items, bulletType='1', start='1'))
 
-            c.setFont("Helvetica", 11)
-            for i, point in enumerate(bullet_points, 1):
-                wrapped_lines = simpleSplit(point, "Helvetica", 11, width - 2*margin)
-                y = draw_text_block([f"{i}. {wrapped_lines[0]}"], y)
-                y = draw_text_block(wrapped_lines[1:], y)
-                y -= 5
-
-            c.showPage()
-            c.save()
+            # Build PDF
+            doc.build(elements)
             buffer.seek(0)
             return buffer
 
         pdf_buffer = create_pdf(final_summary, summaries)
+    except Exception as e:
+        st.error(f"❌ PDF generation failed: {str(e)}")
+        st.stop()
 
-        # --- Tabs ---
+    # --- Step 6: UI Tabs ---
+    try:
         tab_summary, tab_transcript = st.tabs(["📝 Summary", "📜 Transcript"])
 
         with tab_summary:
@@ -137,6 +200,5 @@ if url:
         with tab_transcript:
             st.subheader("📜 Full Transcript")
             st.write(full_text)
-
     except Exception as e:
-        st.error(f"❌ Could not fetch transcript: {str(e)}")
+        st.error(f"❌ UI rendering failed: {str(e)}")
